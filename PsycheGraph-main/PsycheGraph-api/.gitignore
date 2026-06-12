@@ -1,0 +1,53 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# IDES (Mac)
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Sensitive credentials - DO NOT COMMIT
+credentials.json
+token.json
+google_meeting.json
+google_console_cred.json
+
+credentials.json
+
+token.json
+
+google_meeting.json
+
+.env

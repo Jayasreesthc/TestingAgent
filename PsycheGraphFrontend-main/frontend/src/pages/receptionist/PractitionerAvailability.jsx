@@ -1,0 +1,409 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useSelector, useDispatch } from 'react-redux';
+import {
+    Clock,
+    Calendar,
+    AlertCircle,
+    Loader2,
+    Coffee,
+    ChevronRight,
+    Users,
+    Stethoscope,
+    Building
+} from 'lucide-react';
+import PractitionerService from '../../services/PractitionerService';
+import AppointmentService from '../../services/AppointmentService';
+
+import { clsx } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+
+function cn(...inputs) {
+    return twMerge(clsx(inputs));
+}
+
+const DAYS = [
+    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'
+];
+
+export default function ReceptionistAvailabilities() {
+    const { user: currentUser } = useSelector((state) => state.auth);
+    const { list: users } = useSelector((state) => state.users);
+    
+    const [selectedPractitionerId, setSelectedPractitionerId] = useState('');
+    const [schedule, setSchedule] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+
+    // Detailed Availability State
+    const [availabilities, setAvailabilities] = useState([]);
+    const [loadingSlots, setLoadingSlots] = useState(false);
+    const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+    const [endDate, setEndDate] = useState(() => {
+        const d = new Date();
+        d.setDate(d.getDate() + 7);
+        return d.toISOString().split('T')[0];
+    });
+
+    // Derived list of assigned practitioners (same logic as Appointments.jsx)
+    const practitioners = useMemo(() => {
+        const profileAssignedPractitioners =
+            currentUser?.assigned_practitioners ||
+            currentUser?.user?.assigned_practitioners ||
+            currentUser?.details?.assigned_practitioners ||
+            currentUser?.practitioner?.assigned_practitioners;
+
+        if (!Array.isArray(profileAssignedPractitioners) || profileAssignedPractitioners.length === 0) {
+            return [];
+        }
+
+        return profileAssignedPractitioners.map((d) => {
+            const searchName = (d.full_name || d.name || "").toLowerCase().replace(/^dr\.?\s+/i, "").trim();
+            const matchingUser = users.find(u => {
+                if (u.role !== 'PRACTITIONER' && !u.is_practitioner) return false;
+                const uName = (u.full_name || u.name || "").toLowerCase().replace(/^dr\.?\s+/i, "").trim();
+                return uName === searchName || String(u.id) === String(d.id) || String(u.user_id) === String(d.id);
+            });
+            const realPractitionerId = matchingUser?.id || matchingUser?.user_id || d.id;
+            return {
+                id: String(realPractitionerId),
+                full_name: matchingUser?.full_name || d.full_name || d.name || "Unknown Practitioner",
+                metadata: matchingUser?.description || matchingUser?.metadata || d.metadata
+            };
+        });
+    }, [users, currentUser]);
+
+    // Auto-select if only one practitioner
+    useEffect(() => {
+        if (practitioners.length === 1 && !selectedPractitionerId) {
+            setSelectedPractitionerId(practitioners[0].id);
+        }
+    }, [practitioners]);
+
+    const fetchDetailedAvailability = async () => {
+        if (!selectedPractitionerId) return;
+        setLoadingSlots(true);
+        try {
+            const params = {
+                practitioner_id: selectedPractitionerId,
+                organization_id: currentUser?.organization_id || currentUser?.user?.organization_id,
+                start_date: startDate,
+                end_date: endDate,
+                only_available: false // We want to see all slots to know what is booked
+            };
+            const data = await AppointmentService.fetchAvailability(params);
+            setAvailabilities(data || []);
+        } catch (err) {
+            console.error("Failed to fetch detailed availability:", err);
+        } finally {
+            setLoadingSlots(false);
+        }
+    };
+
+    const fetchSchedule = async (id) => {
+        if (!id) return;
+        setLoading(true);
+        setError(null);
+        try {
+            const data = await PractitionerService.getPractitionerSchedule(id);
+            if (Array.isArray(data)) {
+                const formatted = {};
+                data.forEach(item => {
+                    formatted[item.day.toLowerCase()] = item;
+                });
+                setSchedule(formatted);
+            } else {
+                setSchedule(data);
+            }
+        } catch (err) {
+            setError('Failed to fetch practitioner schedule');
+            setSchedule(null);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (selectedPractitionerId) {
+            fetchSchedule(selectedPractitionerId);
+            fetchDetailedAvailability();
+        } else {
+            setSchedule(null);
+            setAvailabilities([]);
+        }
+    }, [selectedPractitionerId, startDate, endDate]);
+
+    const selectedPractitioner = practitioners.find(d => String(d.id) === String(selectedPractitionerId));
+
+    return (
+        <div className="max-w-7xl mx-auto space-y-6 pb-20 px-4 md:px-0">
+            {/* Header Area */}
+            <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+                <div>
+                    <h1 className="text-4xl md:text-5xl font-black text-[#012939] tracking-tight">
+                        Check <span className="text-primary-500">Availabilities</span>
+                    </h1>
+                    <p className="text-slate-400 font-bold uppercase tracking-[0.2em] text-[10px] md:text-xs mt-2 flex items-center gap-2">
+                        <div className="w-8 h-[2px] bg-primary-500" />
+                        Cross-reference real-time slots & weekly schedules
+                    </p>
+                </div>
+            </div>
+
+            {/* Simplified Control Bar */}
+            <div className="mb-8">
+                <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm flex flex-col lg:flex-row items-stretch lg:items-center gap-4 lg:gap-6">
+                    {/* Practitioner Selector */}
+                    <div className="lg:flex-[1.5] min-w-0">
+                        <div className="relative group">
+                            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 z-10">
+                                <Stethoscope size={18} />
+                            </div>
+                            <select
+                                value={selectedPractitionerId}
+                                onChange={(e) => setSelectedPractitionerId(e.target.value)}
+                                className="w-full pl-11 pr-10 py-3 bg-white border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-primary-500/10 focus:border-primary-500 transition-all appearance-none"
+                            >
+                                <option value="">Select Practitioner...</option>
+                                {practitioners.map(doc => (
+                                    <option key={doc.id} value={doc.id}>Dr. {doc.full_name}</option>
+                                ))}
+                            </select>
+                            <div className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                                <ChevronRight size={16} className="rotate-90" />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Date Range Controls */}
+                    <div className="lg:flex-[2.5] flex flex-col md:flex-row items-stretch md:items-center gap-4">
+                        <div className="flex items-center gap-3 flex-1">
+                            <div className="flex flex-col gap-1.5 flex-1">
+                                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider ml-1">Start Date</label>
+                                <div className="relative">
+                                    <Calendar size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                                    <input 
+                                        type="date" 
+                                        value={startDate}
+                                        onChange={(e) => setStartDate(e.target.value)}
+                                        className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 outline-none focus:border-primary-500 transition-all"
+                                    />
+                                </div>
+                            </div>
+                            <div className="text-slate-300 mt-6 hidden md:block shrink-0">
+                                <ChevronRight size={14} />
+                            </div>
+                            <div className="flex flex-col gap-1.5 flex-1">
+                                <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider ml-1">End Date</label>
+                                <div className="relative">
+                                    <Calendar size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                                    <input 
+                                        type="date" 
+                                        value={endDate}
+                                        onChange={(e) => setEndDate(e.target.value)}
+                                        className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-semibold text-slate-700 outline-none focus:border-primary-500 transition-all"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <button 
+                            onClick={fetchDetailedAvailability}
+                            disabled={loadingSlots || !selectedPractitionerId}
+                            className="bg-primary-600 hover:bg-primary-700 disabled:bg-slate-200 text-white px-6 py-3 rounded-lg font-bold text-sm transition-all shadow-sm active:scale-95 flex items-center justify-center gap-2 disabled:cursor-not-allowed shrink-0 mt-auto lg:mt-6"
+                        >
+                            {loadingSlots ? <Loader2 size={16} className="animate-spin" /> : <Clock size={16} />}
+                            Sync Slots
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* Content Area */}
+            <AnimatePresence mode="wait">
+                {practitioners.length === 0 ? (
+                    <motion.div 
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        className="bg-white rounded-[3rem] border border-slate-100 p-16 text-center shadow-xl shadow-slate-100/50"
+                    >
+                        <div className="w-24 h-24 bg-rose-50 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-8 shadow-inner ring-8 ring-rose-50/50">
+                            <AlertCircle size={48} />
+                        </div>
+                        <h3 className="text-3xl font-black text-[#012939] tracking-tight">No Practitioners Assigned</h3>
+                        <p className="text-slate-500 font-medium max-w-md mx-auto mt-4 leading-relaxed">
+                            You currently have no practitioners assigned to your profile. Please contact your coordinator to configure your practitioner list.
+                        </p>
+                    </motion.div>
+                ) : !selectedPractitionerId ? (
+                    <motion.div 
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="py-20 flex flex-col items-center justify-center text-center space-y-6"
+                    >
+                        <div className="relative">
+                            <div className="absolute inset-0 bg-primary-100 rounded-full blur-3xl opacity-30 animate-pulse" />
+                            <div className="relative w-32 h-32 bg-white rounded-full flex items-center justify-center shadow-2xl border border-slate-50">
+                                <Stethoscope size={64} className="text-primary-500" />
+                            </div>
+                        </div>
+                        <div className="space-y-2">
+                            <h3 className="text-2xl font-black text-[#012939]">Welcome, {currentUser?.full_name?.split(' ')[0]}</h3>
+                            <p className="text-slate-400 font-medium">Please select a practitioner to begin verification of availability.</p>
+                        </div>
+                    </motion.div>
+                ) : (
+                    <motion.div 
+                        key={selectedPractitionerId}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ duration: 0.4 }}
+                        className="space-y-8"
+                    >
+                        {/* Selected Practitioner Summary Card */}
+                        {/* <div className="bg-[#012939] rounded-[3rem] p-8 md:p-10 shadow-3xl overflow-hidden relative group">
+                            <div className="absolute top-0 right-0 w-64 h-64 bg-primary-500/10 rounded-full blur-[100px] -translate-y-1/2 translate-x-1/2" />
+                            <div className="absolute bottom-0 left-0 w-64 h-64 bg-primary-500/5 rounded-full blur-[100px] translate-y-1/2 -translate-x-1/2" />
+                            
+                            <div className="relative flex flex-col md:flex-row md:items-center gap-8">
+                                <div className="h-28 w-28 bg-white/10 backdrop-blur-md rounded-[2rem] flex items-center justify-center text-4xl font-black text-white shrink-0 border border-white/20 shadow-2xl ring-4 ring-white/5">
+                                    {selectedPractitioner.full_name?.[0]}
+                                </div>
+                                <div className="flex-1 space-y-4">
+                                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                        <div>
+                                            <h2 className="text-3xl md:text-4xl font-black text-white tracking-tight">Dr. {selectedPractitioner.full_name}</h2>
+                                            <div className="flex flex-wrap gap-3 mt-3">
+                                                <span className="flex items-center gap-2 text-[10px] font-black text-primary-200 bg-primary-500/20 px-4 py-2 rounded-full uppercase tracking-widest border border-primary-500/30">
+                                                    <Users size={12} />
+                                                    Primary Practitioner
+                                                </span>
+                                                <span className="flex items-center gap-2 text-[10px] font-black text-slate-300 bg-white/5 px-4 py-2 rounded-full uppercase tracking-widest border border-white/10">
+                                                    <Building size={12} />
+                                                    PsycheGraph Main
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <p className="text-base text-slate-300 font-medium leading-relaxed max-w-2xl border-l-2 border-primary-500/50 pl-6 italic">
+                                        {selectedPractitioner.metadata || "Specialized in General Psychiatry and Mental Wellbeing."}
+                                    </p>
+                                </div>
+                            </div>
+                        </div> */}
+
+                        {/* Real-time Slots Visualization */}
+                        <div className="space-y-6">
+                            <div className="flex items-center justify-between px-2">
+                                <h3 className="text-2xl font-black text-[#012939] flex items-center gap-3">
+                                    <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center shadow-sm">
+                                        <Clock size={22} />
+                                    </div>
+                                    Real-time Availability
+                                </h3>
+                                <div className="flex items-center gap-4">
+                                    <div className="flex items-center gap-2 text-[9px] font-black text-slate-400 uppercase tracking-widest bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100">
+                                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                                        Live Status
+                                    </div>
+                                </div>
+                            </div>
+
+                            {loadingSlots ? (
+                                <div className="bg-white rounded-[3rem] border border-slate-100 p-24 flex flex-col items-center justify-center gap-6 shadow-sm">
+                                    <div className="relative">
+                                        <div className="absolute inset-0 bg-primary-50 rounded-full scale-150 blur-2xl animate-pulse" />
+                                        <Loader2 className="w-12 h-12 text-primary-500 animate-spin relative z-10" />
+                                    </div>
+                                    <div className="text-center">
+                                        <p className="text-[#012939] font-black text-lg">Synchronizing Slots...</p>
+                                        <p className="text-slate-400 font-medium text-sm mt-1">Cross-referencing appointment database</p>
+                                    </div>
+                                </div>
+                            ) : availabilities.length > 0 ? (
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                                    {Object.entries(availabilities.reduce((acc, slot) => {
+                                        const date = slot.start_time.split(' ')[0];
+                                        if (!acc[date]) acc[date] = [];
+                                        acc[date].push(slot);
+                                        return acc;
+                                    }, {})).sort(([a], [b]) => new Date(a) - new Date(b)).map(([date, slots], idx) => (
+                                        <motion.div 
+                                            key={date}
+                                            initial={{ opacity: 0, y: 20 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            transition={{ delay: idx * 0.05 }}
+                                            className="group bg-white rounded-[2.5rem] border border-slate-100 overflow-hidden shadow-sm hover:shadow-2xl hover:shadow-slate-200/50 hover:-translate-y-2 transition-all duration-500"
+                                        >
+                                            <div className="p-6 bg-slate-50 border-b border-slate-100 flex items-center justify-between group-hover:bg-[#012939] transition-colors duration-500">
+                                                <div className="space-y-0.5">
+                                                    <h4 className="text-sm font-black text-[#012939] group-hover:text-white transition-colors">
+                                                        {new Date(date).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}
+                                                    </h4>
+                                                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest group-hover:text-primary-300 transition-colors">
+                                                        {new Date(date).toLocaleDateString('en-US', { weekday: 'long' })}
+                                                    </p>
+                                                </div>
+                                                <div className="w-10 h-10 bg-white rounded-2xl flex items-center justify-center shadow-sm group-hover:bg-primary-500 transition-colors">
+                                                    <Calendar size={18} className="text-primary-500 group-hover:text-white transition-colors" />
+                                                </div>
+                                            </div>
+                                            
+                                            <div className="p-4 space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar">
+                                                {slots.map((slot) => {
+                                                    const time = new Date(slot.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                                    return (
+                                                        <div 
+                                                            key={slot.id} 
+                                                            className={cn(
+                                                                "group/slot flex items-center justify-between p-3.5 rounded-2xl border transition-all relative overflow-hidden",
+                                                                slot.is_booked 
+                                                                    ? "bg-rose-50/30 border-rose-100/50 grayscale-[0.5]" 
+                                                                    : "bg-white border-slate-100 hover:border-primary-500 hover:ring-2 hover:ring-primary-500/10"
+                                                            )}
+                                                        >
+                                                            <div className="flex items-center gap-3 relative z-10">
+                                                                <div className={cn(
+                                                                    "w-8 h-8 rounded-xl flex items-center justify-center transition-colors shadow-sm",
+                                                                    slot.is_booked ? "bg-rose-100 text-rose-500" : "bg-primary-50 text-primary-500 group-hover/slot:bg-primary-500 group-hover/slot:text-white"
+                                                                )}>
+                                                                    <Clock size={16} />
+                                                                </div>
+                                                                <span className={cn("text-xs font-black tracking-tight", slot.is_booked ? "text-rose-600 line-through opacity-60" : "text-[#012939]")}>
+                                                                    {time}
+                                                                </span>
+                                                            </div>
+                                                            <div className={cn(
+                                                                "px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest relative z-10",
+                                                                slot.is_booked ? "bg-rose-100 text-rose-700" : "bg-emerald-50 text-emerald-600 border border-emerald-100 group-hover/slot:bg-emerald-500 group-hover/slot:text-white group-hover/slot:border-emerald-400"
+                                                            )}>
+                                                                {slot.is_booked ? "Booked" : "Open"}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                            <div className="p-4 bg-slate-50/50 border-t border-slate-100 text-center">
+                                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{slots.length} Total slots configured</p>
+                                            </div>
+                                        </motion.div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="bg-white rounded-[3rem] border-2 border-dashed border-slate-100 p-20 text-center space-y-4">
+                                    <div className="w-20 h-20 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-100">
+                                        <AlertCircle size={40} />
+                                    </div>
+                                    <h4 className="text-xl font-black text-[#012939]">No Slots Generated</h4>
+                                    <p className="text-slate-400 font-medium max-w-xs mx-auto text-sm">No availability slots have been generated for this practitioner during the selected period.</p>
+                                </div>
+                            )}
+                        </div>
+
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    );
+}
